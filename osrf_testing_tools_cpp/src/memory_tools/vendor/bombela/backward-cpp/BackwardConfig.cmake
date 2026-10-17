@@ -79,7 +79,7 @@ if (STACK_WALKING_LIBUNWIND)
 
 	# Disable other unwinders if libunwind is found
 	set(STACK_WALKING_UNWIND FALSE)
-	set(STACK_WALKING_BACKTRACE FALSE)	
+	set(STACK_WALKING_BACKTRACE FALSE)
 endif()
 
 if (${STACK_DETAILS_AUTO_DETECT} AND NOT WIN32)
@@ -89,8 +89,21 @@ if (${STACK_DETAILS_AUTO_DETECT} AND NOT WIN32)
 	# find libdw
 	find_path(LIBDW_INCLUDE_DIR NAMES "elfutils/libdw.h" "elfutils/libdwfl.h")
 	find_library(LIBDW_LIBRARY dw)
+	# in case it's statically linked, look for all the possible dependencies
+	find_library(LIBELF_LIBRARY elf)
+	find_library(LIBPTHREAD_LIBRARY pthread)
+	find_library(LIBZ_LIBRARY z)
+	find_library(LIBBZ2_LIBRARY bz2)
+	find_library(LIBLZMA_LIBRARY lzma)
+	find_library(LIBZSTD_LIBRARY zstd)
 	set(LIBDW_INCLUDE_DIRS ${LIBDW_INCLUDE_DIR} )
-	set(LIBDW_LIBRARIES ${LIBDW_LIBRARY} )
+	set(LIBDW_LIBRARIES ${LIBDW_LIBRARY}
+		$<$<BOOL:${LIBELF_LIBRARY}>:${LIBELF_LIBRARY}>
+		$<$<BOOL:${LIBPTHREAD_LIBRARY}>:${LIBPTHREAD_LIBRARY}>
+		$<$<BOOL:${LIBZ_LIBRARY}>:${LIBZ_LIBRARY}>
+		$<$<BOOL:${LIBBZ2_LIBRARY}>:${LIBBZ2_LIBRARY}>
+		$<$<BOOL:${LIBLZMA_LIBRARY}>:${LIBLZMA_LIBRARY}>
+		$<$<BOOL:${LIBZSTD_LIBRARY}>:${LIBZSTD_LIBRARY}>)
 	find_package_handle_standard_args(libdw ${_name_mismatched_arg}
 		REQUIRED_VARS LIBDW_LIBRARY LIBDW_INCLUDE_DIR)
 	mark_as_advanced(LIBDW_INCLUDE_DIR LIBDW_LIBRARY)
@@ -139,6 +152,17 @@ if (${STACK_DETAILS_AUTO_DETECT} AND NOT WIN32)
 		# If we attempt to link against static bfd, make sure to link its dependencies, too
 		get_filename_component(bfd_lib_ext "${LIBBFD_LIBRARY}" EXT)
 		if (bfd_lib_ext STREQUAL "${CMAKE_STATIC_LIBRARY_SUFFIX}")
+			find_library(LIBSFRAME_LIBRARY NAMES sframe)
+			if (LIBSFRAME_LIBRARY)
+				list(APPEND _BACKWARD_LIBRARIES ${LIBSFRAME_LIBRARY})
+			endif()
+
+			# Binutils can use Zstd for compressed debug sections.
+			find_library(LIBZSTD_LIBRARY NAMES zstd)
+			if (LIBZSTD_LIBRARY)
+				list(APPEND _BACKWARD_LIBRARIES ${LIBZSTD_LIBRARY})
+			endif()
+
 			list(APPEND _BACKWARD_LIBRARIES iberty z)
 		endif()
 
@@ -190,10 +214,17 @@ if (NOT _BACKWARD_DEFINITIONS)
 endif()
 
 if(WIN32)
-    list(APPEND _BACKWARD_LIBRARIES dbghelp psapi)
+	list(APPEND _BACKWARD_LIBRARIES dbghelp psapi)
 	if(MINGW)
-	    set(MINGW_MSVCR_LIBRARY "msvcr90$<$<CONFIG:DEBUG>:d>" CACHE STRING "Mingw MSVC runtime import library")
-	    list(APPEND _BACKWARD_LIBRARIES ${MINGW_MSVCR_LIBRARY})
+		include(CheckCXXCompilerFlag)
+		check_cxx_compiler_flag(-gcodeview SUPPORT_WINDOWS_DEBUG_INFO)
+		if(SUPPORT_WINDOWS_DEBUG_INFO)
+			set(CMAKE_EXE_LINKER_FLAGS "-Wl,--pdb= ")
+			add_compile_options(-gcodeview)
+		else()
+			set(MINGW_MSVCR_LIBRARY "msvcr90$<$<CONFIG:DEBUG>:d>" CACHE STRING "Mingw MSVC runtime import library")
+			list(APPEND _BACKWARD_LIBRARIES ${MINGW_MSVCR_LIBRARY})
+		endif()
 	endif()
 endif()
 
@@ -208,12 +239,17 @@ endif()
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Backward
-    REQUIRED_VARS ${FIND_PACKAGE_REQUIRED_VARS}
+	REQUIRED_VARS ${FIND_PACKAGE_REQUIRED_VARS}
 )
 list(APPEND _BACKWARD_INCLUDE_DIRS ${BACKWARD_INCLUDE_DIR})
 
+# add_backward, optional bool argument; if passed and true, backward will be included as a system header
 macro(add_backward target)
-	target_include_directories(${target} PRIVATE ${BACKWARD_INCLUDE_DIRS})
+	if ("${ARGN}")
+		target_include_directories(${target} SYSTEM PRIVATE ${BACKWARD_INCLUDE_DIRS})
+	else()
+		target_include_directories(${target} PRIVATE ${BACKWARD_INCLUDE_DIRS})
+	endif()
 	set_property(TARGET ${target} APPEND PROPERTY COMPILE_DEFINITIONS ${BACKWARD_DEFINITIONS})
 	set_property(TARGET ${target} APPEND PROPERTY LINK_LIBRARIES ${BACKWARD_LIBRARIES})
 endmacro()
@@ -226,22 +262,22 @@ mark_as_advanced(BACKWARD_INCLUDE_DIRS BACKWARD_DEFINITIONS BACKWARD_LIBRARIES)
 # Expand each definition in BACKWARD_DEFINITIONS to its own cmake var and export
 # to outer scope
 foreach(var ${BACKWARD_DEFINITIONS})
-  string(REPLACE "=" ";" var_as_list ${var})
-  list(GET var_as_list 0 var_name)
-  list(GET var_as_list 1 var_value)
-  set(${var_name} ${var_value})
-  mark_as_advanced(${var_name})
+	string(REPLACE "=" ";" var_as_list ${var})
+	list(GET var_as_list 0 var_name)
+	list(GET var_as_list 1 var_value)
+	set(${var_name} ${var_value})
+	mark_as_advanced(${var_name})
 endforeach()
 
 if (NOT TARGET Backward::Backward)
 	add_library(Backward::Backward INTERFACE IMPORTED)
 	set_target_properties(Backward::Backward PROPERTIES
-	    INTERFACE_INCLUDE_DIRECTORIES "${BACKWARD_INCLUDE_DIRS}"
-	    INTERFACE_COMPILE_DEFINITIONS "${BACKWARD_DEFINITIONS}"
+		INTERFACE_INCLUDE_DIRECTORIES "${BACKWARD_INCLUDE_DIRS}"
+		INTERFACE_COMPILE_DEFINITIONS "${BACKWARD_DEFINITIONS}"
 	)
 	if(BACKWARD_HAS_EXTERNAL_LIBRARIES)
 		set_target_properties(Backward::Backward PROPERTIES
-			INTERFACE_LINK_LIBRARIES "${BACKWARD_LIBRARIES}" 
+			INTERFACE_LINK_LIBRARIES "${BACKWARD_LIBRARIES}"
 		)
 	endif()
 endif()

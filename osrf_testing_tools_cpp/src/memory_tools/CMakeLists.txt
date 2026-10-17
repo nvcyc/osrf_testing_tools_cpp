@@ -1,5 +1,5 @@
 # Integrate backward-cpp according to:
-#   https://github.com/bombela/backward-cpp/tree/v1.5#modifying-cmake_module_path
+#   https://github.com/bombela/backward-cpp/tree/65a769ffe77cf9d759d801bc792ac56af8e911a3#modifying-cmake_module_path
 
 # Note, I had to use Backward_DIR since they provide a config file rather than a module...
 # list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/vendor/bombela/backward-cpp")
